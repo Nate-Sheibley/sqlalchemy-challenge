@@ -18,7 +18,6 @@ Base = automap_base()
 Base.prepare(autoload_with=engine)
 
 # Save references to each table
-print(Base.classes.keys())
 Measurement = Base.classes.measurement
 Station = Base.classes.station
 
@@ -27,27 +26,30 @@ Station = Base.classes.station
 # Flask Setup
 #################################################
 
+#initialize the flask app
 app = Flask(__name__)
-print(app)
 
 #################################################
 # Helper functions to reduce rewriting code
 #################################################
 
 def get_most_recent_date():
-    #open query session from python to db
+    # open query session from python to db
     session = Session(engine)
-    #query and related info
+    # date formate used in data
     date_format = "%Y-%m-%d"
+    #query date, sort by descending, take first item
     most_recent_measurement_date = session.query(Measurement.date).order_by(Measurement.date.desc()).first()
-    #close query session
+    # close query session
     session.close()
-    
+    # pull date string from 1 item tuple and convert to datetime
     most_recent_date = dt.datetime.strptime(most_recent_measurement_date[0], date_format)
     return most_recent_date
 
 def convert_date(date):
+    # date formate used in data
     date_format = "%Y-%m-%d"
+    # convert from string to datetime type
     new_date = dt.datetime.strptime(date, date_format)
     return new_date
 
@@ -67,7 +69,8 @@ def get_most_active_station():
 
     return most_active[0]
 
-def fix_type_to_jsonable(result):
+def fix_row_type_to_jsonable(result):
+    # transform row type to list of tuples
     fixed = [tuple(row) for row in result]
     return fixed
 
@@ -77,13 +80,17 @@ def fix_type_to_jsonable(result):
 
 @app.route("/")
 def root():
-    """Available paths:"""
+    #Available paths:
     return (
-        f"/api/v1.0/precipitation<br/>"
-        f"/api/v1.0/stations<br/>"
-        f"/api/v1.0/tobs<br/>"
-        f"/api/v1.0/<start><br/>"
-        f"/api/v1.0/<start>/<end><br/>"
+        f"<strong>Available paths:</strong><br/>"
+        f"<strong>Static Queries</strong><br/>"
+        f"&emsp;/api/v1.0/precipitation<br/>"
+        f"&emsp;/api/v1.0/stations<br/>"
+        f"&emsp;/api/v1.0/tobs<br/>"
+        f"<strong>Dynamic Queries</strong><br/>"
+        f"&emsp;/api/v1.0/&lt;start&gt;<br/>"
+        f"&emsp;/api/v1.0/&lt;start&gt;/&lt;end&gt;<br/>"
+        f'&emsp;&emsp;%Y-%m-%d or (yyyy-mm-dd) are the expected format for start and end</br>'
     )
 
 @app.route("/api/v1.0/precipitation")
@@ -99,17 +106,17 @@ def precip():
     #open query session from python to db
     session = Session(engine)
 
-    #query and related info
+    # Set columns of interest
     measurement_columns = [Measurement.date, Measurement.prcp]
-    # Perform a query to retrieve the data and precipitation scores
+    # query columns of interest from max 1 year ago, retreive all
     prev_year_query = session.query(*measurement_columns).\
-            filter(Measurement.date > one_year_ago).all()
+            filter(Measurement.date > one_year_ago).\
+            all()
 
     #close query session
     session.close()
 
-    prev_year_dict = dict(prev_year_query)
-    return jsonify(prev_year_dict)
+    return jsonify(dict(prev_year_query))
 
 
 @app.route("/api/v1.0/stations")
@@ -118,13 +125,13 @@ def station_list():
     #open query session from python to db
     session = Session(engine)
 
-    #query and related info
-    stations = session.query(Station.station).all()
+    # Query for all stations in stations table
+    stations = session.query(Station.station, Station.name).all()
 
     #close query session
     session.close()
 
-    return jsonify(fix_type_to_jsonable(stations))
+    return jsonify(fix_row_type_to_jsonable(stations))
 
 @app.route("/api/v1.0/tobs")
 def temp_observed():
@@ -138,8 +145,9 @@ def temp_observed():
     #open query session from python to db
     session = Session(engine)
 
-    #query and related info
-    twelve_month_temp = session.query(Measurement.date, Measurement.tobs).\
+    # Query date and temp_observed for prev 1 year at most active station.
+    measurement_columns = [Measurement.date, Measurement.tobs]
+    twelve_month_temp = session.query(*measurement_columns).\
         filter(Measurement.date > one_year_ago).\
         filter(Measurement.station == most_active).\
         all()
@@ -147,22 +155,25 @@ def temp_observed():
     #close query session
     session.close()
 
-    return jsonify(fix_type_to_jsonable(twelve_month_temp))
+    return jsonify(dict(twelve_month_temp))
 
 @app.route("/api/v1.0/<start>")
 def min_max_avg_T(start):
     # start is expected to be format "%Y-%m-%d"
     print('running extremes page, to present')
     most_active = get_most_active_station()
+    # convert dates from string to datetime
     start = convert_date(start)
 
     # open query session from python to db
     session = Session(engine)
 
-    # query and related info
-    min_max_avg_temp = session.query(*[func.min(Measurement.tobs).label("min"),
-                                   func.max(Measurement.tobs).label("max"),
-                                   func.avg(Measurement.tobs).label("avg")]).\
+    # values of interest. min, max and avg temperatures in the date range
+    agg_values = [func.min(Measurement.tobs).label("min"),
+                  func.max(Measurement.tobs).label("max"),
+                  func.avg(Measurement.tobs).label("avg")]
+    #query values of interest for most active station from start to present
+    (TMIN, TMAX, TAVG) = session.query(*agg_values).\
                             filter(Measurement.station == most_active).\
                             filter(Measurement.date >= start).\
                             first()
@@ -170,7 +181,8 @@ def min_max_avg_T(start):
     #close query session
     session.close()
 
-    return jsonify(min_max_avg_temp)
+    #structure the json results
+    return jsonify(TMIN=f'{TMIN} F', TMAX=f'{TMAX} F', TAVG=f'{TAVG} F')
 
 
 @app.route("/api/v1.0/<start>/<end>")
@@ -178,16 +190,19 @@ def min_max_avg_T_2ended(start, end):
     # start and end are expected to be format "%Y-%m-%d"
     print('running extremes page, start - end')
     most_active = get_most_active_station()
+    # convert dates from string to datetime
     start = convert_date(start)
     end = convert_date(end)
 
     #open query session from python to db
     session = Session(engine)
 
-    #query and related info
-    min_max_avg_temp = session.query(*[func.min(Measurement.tobs).label("min"),
-                                    func.max(Measurement.tobs).label("max"),
-                                    func.avg(Measurement.tobs).label("avg")]).\
+    # values of interest. min, max and avg temperatures in the date range
+    agg_values = [func.min(Measurement.tobs).label("min"),
+                  func.max(Measurement.tobs).label("max"),
+                  func.avg(Measurement.tobs).label("avg")]
+    #query values of interest for most active station from start to end dates
+    (TMIN, TMAX, TAVG) = session.query(*agg_values).\
                             filter(Measurement.station == most_active).\
                             filter(Measurement.date >= start).\
                             filter(Measurement.date <= end).\
@@ -196,7 +211,9 @@ def min_max_avg_T_2ended(start, end):
     #close query session
     session.close()
 
-    return jsonify(min_max_avg_temp)
+    #structure the json results
+    return jsonify(TMIN=f'{TMIN} F', TMAX=f'{TMAX} F', TAVG=f'{TAVG} F')
 
+#Run the flask app
 if __name__ == "__main__":
     app.run()
