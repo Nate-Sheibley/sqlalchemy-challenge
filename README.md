@@ -1,5 +1,5 @@
-# sqlalchemy-challenge
-UCBerkeley-Ext data analytics bootcamp HW8
+# sqlalchemy-intro
+Small exploration into using SQLAlchemy to generate a session and query a database.
 
 # References
 
